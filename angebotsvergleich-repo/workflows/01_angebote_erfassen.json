@@ -1,0 +1,301 @@
+{
+  "name": "Angebotsvergleich 1 – Angebote erfassen",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Lieferantenangebote erfassen",
+        "formDescription": "Anfrage ANF-2026-0417 · Lade die Angebots-PDFs hoch. Die KI liest sie aus, der Workflow rechnet sie vergleichbar und speichert sie.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Angebote (PDF)",
+              "fieldName": "angebote",
+              "fieldType": "file",
+              "multipleFiles": true,
+              "acceptFileTypes": ".pdf",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {
+          "buttonLabel": "Angebote auswerten",
+          "customCss": ":root { --container-width: 860px; }\n.container, .card { max-width: 860px !important; width: 100% !important; }\n.form-header p, .card p { font-size: 15px; }"
+        }
+      },
+      "id": "44b3398a-aa18-50a7-b51f-89f171a496bb",
+      "name": "Angebote hochladen",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "8205a966-deb0-51c2-849f-fe950640baa0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Jede eingehende Mail (oder jeder Testlauf) kann mehrere Anhänge haben.\n// Wir machen daraus ein Item pro PDF, immer im Binärfeld \"data\".\nconst out = [];\nfor (const item of $input.all()) {\n  const bin = item.binary || {};\n  for (const file of Object.values(bin)) {\n    const name = (file.fileName || '').toLowerCase();\n    const istPdf = (file.mimeType || '').includes('pdf') || name.endsWith('.pdf');\n    if (!istPdf) continue;\n    if (name.startsWith('00_anfrage')) continue; // eigene Anfrage nicht als Angebot werten\n    out.push({\n      json: {\n        quelle_datei: file.fileName,\n        absender: item.json.from || 'Testlauf',\n        betreff: item.json.subject || '',\n        empfangen_am: item.json.date || new Date().toISOString(),\n      },\n      binary: { data: file },\n    });\n  }\n}\nreturn out;\n"
+      },
+      "id": "84e4cbcd-8cd7-5226-94f2-7128f868fe4d",
+      "name": "PDF-Anhänge aufteilen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "af0f5387-46f8-5a57-9397-2ff198e2f2b3",
+      "name": "PDF → Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Lies das folgende Lieferantenangebot und extrahiere die Daten exakt nach dem vorgegebenen Schema.\n\nANFRAGE, auf die sich das Angebot bezieht:\n- Anfrage-Nr.: ANF-2026-0417\n- Pos. 1: Handstretchfolie, 500 mm breit, 23 µm, transparent, ca. 2,5 kg/Rolle – 300 Rollen\n- Pos. 2: Kantenschutzecken Pappe, 35 x 35 x 3 mm, Länge 1.000 mm – 5.000 Stück\n- Lieferung frei Haus gewünscht, spätestens 10 Arbeitstage nach Bestellung\n\nREGELN:\n1. Übernimm Zahlen exakt wie im Dokument. Nichts schätzen oder erfinden. Fehlt eine Angabe, setze null.\n2. Ordne jede Angebotsposition der passenden Anfrage-Position (1 oder 2) zu. Fracht, Paletten, Pfand und Zuschläge gehören NICHT in \"positionen\", sondern in \"nebenkosten\" (Pfand mit erstattbar = true).\n3. \"gesamtpreis\" ist der Nettobetrag der Position für die angebotene Menge. Bei Staffelpreisen: der Betrag für die angefragte Menge. Steht kein Positionsbetrag da, rechne Menge x Preis.\n4. Wird eine Anfrage-Position nicht angeboten, nimm sie nicht in \"positionen\" auf, sondern ihre Nummer in \"nicht_angeboten\".\n5. Weicht ein Artikel von der Spezifikation der Anfrage ab (Maße, Stärke, Material), beschreibe das kurz in \"abweichung\", sonst null.\n6. Datumsangaben im Format JJJJ-MM-TT. Ist die Gültigkeit als Frist angegeben (z. B. \"14 Tage\"), rechne das Datum ab dem Angebotsdatum aus.\n7. Lieferzeit in Werktagen; bei Spannen den Maximalwert (1 Woche = 5 Werktage).\n8. \"hinweise\": alles, was ein Einkäufer wissen sollte (z. B. \"freibleibend\", \"nicht ab Lager\").\n\nANGEBOTSTEXT:\n{{ $json.text }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "type": "SystemMessagePromptTemplate",
+              "message": "Du bist ein sorgfältiger Einkaufsassistent. Du extrahierst Daten aus Lieferantenangeboten ausschließlich aus dem gegebenen Text und antwortest nur im geforderten Format."
+            }
+          ]
+        },
+        "batching": {
+          "batchSize": 2,
+          "delayBetweenBatches": 500
+        }
+      },
+      "id": "e24e513a-d87e-5408-bd4e-895fe73baef9",
+      "name": "KI: Angebot auslesen",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        720,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-5",
+          "cachedResultName": "Claude Sonnet 5"
+        },
+        "options": {
+          "maxTokensToSample": 4096
+        }
+      },
+      "id": "d6905c85-9e05-536f-9b6f-77512f43a20c",
+      "name": "Claude (Extraktion)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.6,
+      "position": [
+        640,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"lieferant\": {\n      \"type\": \"string\",\n      \"description\": \"Firmenname des Anbieters\"\n    },\n    \"angebotsnr\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ]\n    },\n    \"anfrage_ref\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ]\n    },\n    \"angebotsdatum\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ]\n    },\n    \"gueltig_bis\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ]\n    },\n    \"positionen\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"anfrage_pos\": {\n            \"type\": \"integer\"\n          },\n          \"artikel\": {\n            \"type\": \"string\"\n          },\n          \"menge\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"einheit\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ]\n          },\n          \"preis\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"preiseinheit\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"description\": \"z. B. €/Rolle, €/kg, €/100 Stk\"\n          },\n          \"gesamtpreis\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"abweichung\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ]\n          }\n        },\n        \"required\": [\n          \"anfrage_pos\",\n          \"artikel\",\n          \"gesamtpreis\",\n          \"abweichung\"\n        ]\n      }\n    },\n    \"nicht_angeboten\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"integer\"\n      }\n    },\n    \"nebenkosten\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"bezeichnung\": {\n            \"type\": \"string\"\n          },\n          \"betrag\": {\n            \"type\": \"number\"\n          },\n          \"erstattbar\": {\n            \"type\": \"boolean\"\n          }\n        },\n        \"required\": [\n          \"bezeichnung\",\n          \"betrag\",\n          \"erstattbar\"\n        ]\n      }\n    },\n    \"frei_haus\": {\n      \"type\": [\n        \"boolean\",\n        \"null\"\n      ]\n    },\n    \"summe_netto_laut_angebot\": {\n      \"type\": [\n        \"number\",\n        \"null\"\n      ]\n    },\n    \"lieferzeit_werktage\": {\n      \"type\": [\n        \"integer\",\n        \"null\"\n      ]\n    },\n    \"zahlungsziel_tage\": {\n      \"type\": [\n        \"integer\",\n        \"null\"\n      ]\n    },\n    \"skonto_prozent\": {\n      \"type\": [\n        \"number\",\n        \"null\"\n      ]\n    },\n    \"skonto_tage\": {\n      \"type\": [\n        \"integer\",\n        \"null\"\n      ]\n    },\n    \"hinweise\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      }\n    }\n  },\n  \"required\": [\n    \"lieferant\",\n    \"positionen\",\n    \"nicht_angeboten\",\n    \"nebenkosten\",\n    \"summe_netto_laut_angebot\",\n    \"lieferzeit_werktage\",\n    \"skonto_prozent\",\n    \"hinweise\"\n  ]\n}"
+      },
+      "id": "7cd0a900-8e89-5a4d-a3cd-1a449ca51a34",
+      "name": "Schema: Angebotsdaten",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        820,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Läuft einmal pro Angebot. Die KI liefert die Rohwerte,\n// gerechnet und geprüft wird hier – deterministisch und nachvollziehbar.\nconst ANFRAGE = {\n  id: 'ANF-2026-0417',\n  max_lieferzeit_wt: 10,\n  positionen: {\n    1: { menge: 300, einheit: 'Rolle', name: 'Stretchfolie 500 mm / 23 µm' },\n    2: { menge: 5000, einheit: 'Stk', name: 'Kantenschutz 35x35x3' },\n  },\n};\nconst r2 = (x) => (x == null || isNaN(x) ? null : Math.round(x * 100) / 100);\nconst r3 = (x) => (x == null || isNaN(x) ? null : Math.round(x * 1000) / 1000);\n\nconst a = $json.output;\nconst meta = $('PDF-Anhänge aufteilen').item.json;\nconst warnungen = [];\nconst abweichungen = [];\n\n// 1) Einzelpreise auf die Einheit der Anfrage umrechnen:\n//    Positionsbetrag / angefragte Menge. Damit werden €/kg, €/100 Stk\n//    und Staffelpreise automatisch vergleichbar.\nconst ep = {};\nlet warenwert = 0;\nfor (const p of a.positionen || []) {\n  const soll = ANFRAGE.positionen[p.anfrage_pos];\n  if (!soll || p.gesamtpreis == null) {\n    warnungen.push(`Position nicht zuordenbar: ${p.artikel}`);\n    continue;\n  }\n  if (p.menge != null && p.einheit && /rolle|stk|stück/i.test(p.einheit) && p.menge !== soll.menge) {\n    abweichungen.push(`Pos. ${p.anfrage_pos}: Menge ${p.menge} statt ${soll.menge}`);\n  }\n  ep[p.anfrage_pos] = r3(p.gesamtpreis / soll.menge);\n  warenwert += p.gesamtpreis;\n  if (p.abweichung) abweichungen.push(`Pos. ${p.anfrage_pos}: ${p.abweichung}`);\n}\n\nif (a.lieferzeit_werktage != null && a.lieferzeit_werktage > ANFRAGE.max_lieferzeit_wt) {\n  abweichungen.push(`Lieferzeit ${a.lieferzeit_werktage} WT > gewünscht ${ANFRAGE.max_lieferzeit_wt} WT`);\n} else if (a.lieferzeit_werktage == null) {\n  warnungen.push('Keine Lieferzeit angegeben');\n}\n\n// 2) Vollständigkeit\nconst fehlend = Object.keys(ANFRAGE.positionen).map(Number).filter((n) => ep[n] == null);\nconst vollstaendig = fehlend.length === 0;\n\n// 3) Nebenkosten: Fracht, Pfand, Zuschläge. Erstattbares (z. B. Palettenpfand) separat.\nlet nebenkosten = 0;\nlet erstattbar = 0;\nfor (const n of a.nebenkosten || []) {\n  nebenkosten += n.betrag || 0;\n  if (n.erstattbar) erstattbar += n.betrag || 0;\n}\nconst summe = r2(warenwert + nebenkosten);\n\n// 4) Plausibilität: Stimmt unsere Rechnung mit der Summe im Angebot überein?\nif (a.summe_netto_laut_angebot != null && Math.abs(a.summe_netto_laut_angebot - summe) > 0.05) {\n  warnungen.push(`Summe weicht ab: berechnet ${summe} €, laut Angebot ${a.summe_netto_laut_angebot} €`);\n}\nif (a.anfrage_ref && a.anfrage_ref !== ANFRAGE.id) {\n  warnungen.push(`Angebot bezieht sich auf ${a.anfrage_ref}, nicht auf ${ANFRAGE.id}`);\n}\n\nreturn {\n  json: {\n    anfrage: ANFRAGE.id,\n    lieferant: a.lieferant,\n    angebotsnr: a.angebotsnr ?? '',\n    angebotsdatum: a.angebotsdatum ?? '',\n    gueltig_bis: a.gueltig_bis ?? '',\n    pos1_ep_normiert: ep[1] ?? null,\n    pos2_ep_normiert: ep[2] ?? null,\n    warenwert: r2(warenwert),\n    nebenkosten: r2(nebenkosten),\n    davon_erstattbar: r2(erstattbar),\n    summe_netto: summe,\n    lieferzeit_wt: a.lieferzeit_werktage ?? null,\n    zahlungsziel_tage: a.zahlungsziel_tage ?? null,\n    skonto_prozent: a.skonto_prozent ?? 0,\n    skonto_tage: a.skonto_tage ?? null,\n    vollstaendig,\n    fehlende_positionen: fehlend.join(', '),\n    abweichungen: abweichungen.join(' | '),\n    warnungen: warnungen.join(' | '),\n    hinweise: (a.hinweise || []).join(' | '),\n    quelle_datei: meta.quelle_datei,\n    status: warnungen.length ? 'prüfen' : 'erfasst',\n  },\n};\n"
+      },
+      "id": "955cd2ac-92f8-56f3-b0fe-980c811d8d4b",
+      "name": "Normalisieren & prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "row",
+        "operation": "insert",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "angebote"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "996374ff-5410-5658-ac27-11dc586ef4e9",
+      "name": "In Datentabelle speichern",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "=<h2>{{ $('Normalisieren & prüfen').all().length }} Angebote erfasst</h2><table style=\"width:100%;border-collapse:collapse;font-size:14px\"><tr style=\"text-align:left;border-bottom:1px solid #ccc\"><th>Lieferant</th><th>Summe netto</th><th>Lieferzeit</th><th>Status</th></tr>{{ $('Normalisieren & prüfen').all().map(i => '<tr style=\"border-bottom:1px solid #eee\"><td>' + i.json.lieferant + '</td><td>' + i.json.summe_netto.toLocaleString('de-DE', {minimumFractionDigits: 2}) + ' €</td><td>' + (i.json.lieferzeit_wt ?? '?') + ' AT</td><td>' + (i.json.abweichungen || i.json.fehlende_positionen ? '⚠ ' + [i.json.abweichungen, i.json.fehlende_positionen ? 'fehlt: Pos. ' + i.json.fehlende_positionen : ''].filter(Boolean).join(' | ') : '✓ ok') + '</td></tr>').join('') }}</table><p>Als Nächstes: Workflow 2 starten, um zu vergleichen und freizugeben.</p>"
+      },
+      "id": "fc506d0a-dec9-52e3-8440-ad4e433917a7",
+      "name": "Ergebnis anzeigen",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1440,
+        300
+      ],
+      "executeOnce": true,
+      "webhookId": "bdea6515-ce54-5547-8184-bd7bcd7bbf36"
+    },
+    {
+      "parameters": {
+        "content": "## 1 · Angebote erfassen\nPDFs per Formular hochladen → Text → **KI liest** (festes JSON-Schema) → **Code rechnet** (€/kg → €/Rolle, Summen-Check, Abgleich mit Anfrage) → Datentabelle `angebote`.",
+        "color": 7,
+        "width": 640,
+        "height": 224
+      },
+      "id": "9b4268a8-c1e9-5442-9a54-a59ac70858e1",
+      "name": "Notiz: Angebote erfassen",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        208
+      ]
+    }
+  ],
+  "connections": {
+    "Angebote hochladen": {
+      "main": [
+        [
+          {
+            "node": "PDF-Anhänge aufteilen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF-Anhänge aufteilen": {
+      "main": [
+        [
+          {
+            "node": "PDF → Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF → Text": {
+      "main": [
+        [
+          {
+            "node": "KI: Angebot auslesen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KI: Angebot auslesen": {
+      "main": [
+        [
+          {
+            "node": "Normalisieren & prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude (Extraktion)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "KI: Angebot auslesen",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schema: Angebotsdaten": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "KI: Angebot auslesen",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalisieren & prüfen": {
+      "main": [
+        [
+          {
+            "node": "In Datentabelle speichern",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "In Datentabelle speichern": {
+      "main": [
+        [
+          {
+            "node": "Ergebnis anzeigen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

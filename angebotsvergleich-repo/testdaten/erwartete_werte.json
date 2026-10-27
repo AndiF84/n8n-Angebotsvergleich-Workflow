@@ -1,0 +1,82 @@
+{
+  "anfrage": "ANF-2026-0417",
+  "hinweis": "Soll-Werte zum Testen der KI-Extraktion. Preise netto in EUR.",
+  "angebote": [
+    {
+      "lieferant": "Folien Becker KG",
+      "angebotsnr": "AN-88213",
+      "datum": "2026-10-07",
+      "gueltig_bis": "2026-11-06",
+      "pos1_preis_rolle": 6.2,
+      "pos2_preis_stk": 0.18,
+      "fracht": 0.0,
+      "nebenkosten": 0.0,
+      "summe_netto": 2760.0,
+      "lieferzeit_tage": 5,
+      "zahlung": "10 Tage 2 % Skonto, 30 Tage netto",
+      "skonto_prozent": 2.0,
+      "vollstaendig": true,
+      "abweichungen": []
+    },
+    {
+      "lieferant": "PackTec Solutions GmbH",
+      "angebotsnr": "Q-2026-1102",
+      "datum": "2026-10-08",
+      "gueltig_bis": "2026-10-22",
+      "pos1_preis_rolle": 5.875,
+      "pos2_preis_stk": 0.16,
+      "fracht": 89.0,
+      "nebenkosten": 0.0,
+      "summe_netto": 2651.5,
+      "lieferzeit_tage": 15,
+      "zahlung": "30 Tage netto",
+      "skonto_prozent": 0.0,
+      "vollstaendig": true,
+      "abweichungen": [
+        "Preis pro kg statt pro Rolle",
+        "Preis Pos. 2 pro 100 Stück",
+        "Lieferzeit 2–3 Wochen (max. 15 Werktage) überschreitet die gewünschten 10 Arbeitstage"
+      ]
+    },
+    {
+      "lieferant": "Hessen Verpackung Erfundene GmbH & Co. KG",
+      "angebotsnr": "2026-511",
+      "datum": "2026-10-09",
+      "gueltig_bis": "2026-10-31",
+      "pos1_preis_rolle": 5.9,
+      "pos2_preis_stk": null,
+      "fracht": 0.0,
+      "nebenkosten": 0.0,
+      "summe_netto": 1770.0,
+      "lieferzeit_tage": 3,
+      "zahlung": "8 Tage 3 % Skonto, 30 Tage netto",
+      "skonto_prozent": 3.0,
+      "vollstaendig": false,
+      "abweichungen": [
+        "Pos. 2 nicht angeboten (Teilangebot)",
+        "Staffelpreis: 6,40 €/Rolle bis 199, 5,90 € ab 200"
+      ]
+    },
+    {
+      "lieferant": "EuroWrap Trading Ltd.",
+      "angebotsnr": "EW-77-4410",
+      "datum": "2026-10-10",
+      "gueltig_bis": "2026-10-31",
+      "pos1_preis_rolle": 5.1,
+      "pos2_preis_stk": 0.17,
+      "fracht": 120.0,
+      "nebenkosten": 24.0,
+      "summe_netto": 2524.0,
+      "lieferzeit_tage": 10,
+      "zahlung": "14 Tage netto",
+      "skonto_prozent": 0.0,
+      "vollstaendig": true,
+      "abweichungen": [
+        "Spezifikation: 20 µm statt 23 µm (Alternativangebot)",
+        "Palettenpfand 24 € (bei Rückgabe gutgeschrieben)",
+        "Angebot freibleibend"
+      ]
+    }
+  ],
+  "erwartete_empfehlung": "Folien Becker KG: einziges vollständiges Angebot, das Spezifikation und Lieferfrist erfüllt (frei Haus, 5 AT, effektiv 2.704,80 € nach 2 % Skonto). EuroWrap ist nominal günstiger, weicht aber bei der Folienstärke ab; PackTec überschreitet die Lieferfrist; Hessen Verpackung ist nur ein Teilangebot."
+}

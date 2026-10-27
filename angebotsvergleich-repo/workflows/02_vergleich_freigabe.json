@@ -1,0 +1,380 @@
+{
+  "name": "Angebotsvergleich 2 – Vergleich & Freigabe",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Angebotsvergleich starten",
+        "formDescription": "Vergleicht alle erfassten Angebote zu einer Anfrage und legt dir eine Empfehlung zur Freigabe vor.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Anfrage-Nr.",
+              "fieldName": "anfrage",
+              "defaultValue": "ANF-2026-0417",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Vergleichen",
+          "customCss": ":root { --container-width: 860px; }\n.container, .card { max-width: 860px !important; width: 100% !important; }\n.form-header p, .card p { font-size: 15px; }"
+        }
+      },
+      "id": "e856eaf3-ec97-57db-8031-f049b56fa8d4",
+      "name": "Vergleich starten",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        304
+      ],
+      "webhookId": "741a4cf5-4036-5345-9e48-9ce81a5c844c"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "angebote"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "anfrage",
+              "keyValue": "={{ ($json.anfrage ?? $json['Anfrage-Nr.']).trim() }}"
+            }
+          ]
+        },
+        "returnAll": true
+      },
+      "id": "72d52c18-5014-5e15-b7f8-4f119441c4b0",
+      "name": "Angebote laden",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Regelbasiertes Ranking. Die KI begründet danach nur noch –\n// sie entscheidet nicht. So bleibt die Bewertung prüfbar.\nconst start = $('Vergleich starten').first().json;\nconst anfrage = (start.anfrage ?? start['Anfrage-Nr.'] ?? '').trim();\nconst num = (v) => (v === '' || v == null ? null : Number(String(v).replace(',', '.')));\nconst bool = (v) => v === true || String(v).toUpperCase() === 'TRUE';\nconst heute = new Date().toISOString().slice(0, 10);\n\n// Pro Lieferant + Angebotsnummer nur den neuesten Eintrag nehmen (falls ein Angebot mehrfach hochgeladen wurde)\nconst neueste = {};\nfor (const r of $input.all().map((i) => i.json)) {\n  if (r.anfrage !== anfrage) continue;\n  const key = `${r.lieferant}|${r.angebotsnr}`;\n  if (!neueste[key] || String(r.createdAt ?? r.id) > String(neueste[key].createdAt ?? neueste[key].id)) neueste[key] = r;\n}\nconst angebote = Object.values(neueste);\nif (!angebote.length) throw new Error(`Keine Angebote zu ${anfrage} gefunden. Erst Workflow 1 ausführen.`);\n\nconst KATEGORIEN = {\n  empfehlbar: 'vollständig und nach Spezifikation',\n  rueckfrage: 'vollständig, aber Abweichung (Spezifikation/Lieferzeit) – Rückfrage nötig',\n  teilangebot: 'unvollständig (Teilangebot)',\n  abgelaufen: 'Angebot abgelaufen',\n};\nconst ORDER = ['empfehlbar', 'rueckfrage', 'teilangebot', 'abgelaufen'];\n\nconst bewertet = angebote.map((r) => {\n  const summe = num(r.summe_netto) ?? 0;\n  const erstattbar = num(r.davon_erstattbar) ?? 0;\n  const skonto = num(r.skonto_prozent) ?? 0;\n  // Effektive Kosten: ohne erstattbares Pfand, abzüglich Skonto\n  const effektiv = Math.round((summe - erstattbar) * (1 - skonto / 100) * 100) / 100;\n  let kategorie = 'empfehlbar';\n  if (r.gueltig_bis && r.gueltig_bis < heute) kategorie = 'abgelaufen';\n  else if (!bool(r.vollstaendig)) kategorie = 'teilangebot';\n  else if (r.abweichungen) kategorie = 'rueckfrage';\n  return {\n    lieferant: r.lieferant,\n    angebotsnr: r.angebotsnr,\n    summe_netto: summe,\n    effektiv,\n    skonto_prozent: skonto,\n    lieferzeit_wt: num(r.lieferzeit_wt),\n    zahlungsziel_tage: num(r.zahlungsziel_tage),\n    gueltig_bis: r.gueltig_bis,\n    kategorie,\n    kategorie_text: KATEGORIEN[kategorie],\n    abweichungen: r.abweichungen || '',\n    fehlende_positionen: r.fehlende_positionen || '',\n    warnungen: r.warnungen || '',\n  };\n});\n\nbewertet.sort(\n  (x, y) =>\n    ORDER.indexOf(x.kategorie) - ORDER.indexOf(y.kategorie) ||\n    x.effektiv - y.effektiv ||\n    (x.lieferzeit_wt ?? 99) - (y.lieferzeit_wt ?? 99)\n);\nbewertet.forEach((b, i) => (b.rang = i + 1));\n\nconst favorit = bewertet[0];\n// Nominal günstigstes Angebot – nur vollständige zählen, sonst hinkt der Vergleich\nconst vergleichbar = bewertet.filter((b) => b.kategorie !== 'teilangebot');\nconst billigster = [...(vergleichbar.length ? vergleichbar : bewertet)].sort((x, y) => x.summe_netto - y.summe_netto)[0];\nconst eur = (x) => x.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';\n\nconst tabelle = bewertet\n  .map(\n    (b) =>\n      `${b.rang}. ${b.lieferant} – ${eur(b.summe_netto)} netto (effektiv ${eur(b.effektiv)}), ` +\n      `${b.lieferzeit_wt ?? '?'} WT, ${b.kategorie_text}` +\n      (b.abweichungen ? ` [${b.abweichungen}]` : '') +\n      (b.fehlende_positionen ? ` [fehlt: Pos. ${b.fehlende_positionen}]` : '') +\n      (b.warnungen ? ` ⚠ ${b.warnungen}` : '')\n  )\n  .join('\\n');\n\nconst farbe = { empfehlbar: '#1a7f37', rueckfrage: '#9a6700', teilangebot: '#cf222e', abgelaufen: '#6e7781' };\nconst tabelle_html =\n  '<table style=\"width:100%;border-collapse:collapse;font-size:13px;text-align:left\">' +\n  '<tr style=\"border-bottom:2px solid #ccc\"><th>#</th><th>Lieferant</th><th>Netto</th><th>Effektiv</th><th>Lieferzeit</th><th>Bewertung</th></tr>' +\n  bewertet\n    .map(\n      (b) =>\n        `<tr style=\"border-bottom:1px solid #eee;${b.rang === 1 ? 'font-weight:bold' : ''}\"><td>${b.rang}</td><td>${b.lieferant}</td>` +\n        `<td>${eur(b.summe_netto)}</td><td>${eur(b.effektiv)}</td><td>${b.lieferzeit_wt ?? '?'} AT</td>` +\n        `<td style=\"color:${farbe[b.kategorie]}\">${b.kategorie_text}` +\n        (b.abweichungen ? `<br><small>${b.abweichungen}</small>` : '') +\n        (b.fehlende_positionen ? `<br><small>fehlt: Pos. ${b.fehlende_positionen}</small>` : '') +\n        `</td></tr>`\n    )\n    .join('') +\n  '</table><p><small>Effektiv = netto ohne erstattbares Pfand, abzüglich Skonto.</small></p>';\n\nreturn [\n  {\n    json: {\n      anfrage,\n      tabelle_html,\n      anzahl_angebote: bewertet.length,\n      favorit,\n      billigster_nominal: billigster.lieferant,\n      favorit_ist_nicht_billigster: billigster.lieferant !== favorit.lieferant,\n      rangliste: bewertet,\n      tabelle,\n    },\n  },\n];\n"
+      },
+      "id": "bceafcd9-20a8-5977-bf51-54f121648bc8",
+      "name": "Ranking & Bewertung",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Erstelle eine Entscheidungsvorlage für die Einkaufsleitung zur Anfrage {{ $json.anfrage }}. Sachlich, Deutsch, kurze Sätze, kein Markdown.\n\nDie Rangfolge wurde regelbasiert berechnet. Ändere sie NICHT und erfinde keine Zahlen – nutze nur Werte aus der Rangliste.\n{{ $json.favorit_ist_nicht_billigster ? 'Wichtig: Der nominal günstigste vollständige Anbieter (' + $json.billigster_nominal + ') ist NICHT Rang 1. Erkläre das in der Abgrenzung.' : '' }}\n\nRangliste (JSON):\n{{ JSON.stringify($json.rangliste, null, 1) }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Du bist ein erfahrener Einkäufer und schreibst knappe, nachvollziehbare Entscheidungsvorlagen."
+            }
+          ]
+        }
+      },
+      "id": "6e596410-653d-5e77-a9b2-8bbf6919dc26",
+      "name": "KI: Empfehlung formulieren",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        720,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "claude-sonnet-5",
+          "cachedResultName": "Claude Sonnet 5"
+        },
+        "options": {
+          "maxTokensToSample": 1024
+        }
+      },
+      "id": "11c565ca-bafa-5049-9e40-5bbc4261f925",
+      "name": "Claude (Empfehlung)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.6,
+      "position": [
+        720,
+        528
+      ]
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"empfehlung\": {\n      \"type\": \"string\",\n      \"description\": \"Ein Satz: welches Angebot zur Beauftragung empfohlen wird (mit Angebotsnummer).\"\n    },\n    \"begruendung\": {\n      \"type\": \"string\",\n      \"description\": \"2-3 kurze Sätze, warum Rang 1 empfohlen wird (Vollständigkeit, Spezifikation, Lieferzeit, effektive Kosten).\"\n    },\n    \"abgrenzung\": {\n      \"type\": \"string\",\n      \"description\": \"1-3 kurze Sätze zu den Alternativen, insbesondere warum der nominal günstigste Anbieter nicht Rang 1 ist.\"\n    },\n    \"naechster_schritt\": {\n      \"type\": \"string\",\n      \"description\": \"Ein Satz mit dem nächsten sinnvollen Schritt.\"\n    }\n  },\n  \"required\": [\n    \"empfehlung\",\n    \"begruendung\",\n    \"abgrenzung\",\n    \"naechster_schritt\"\n  ]\n}"
+      },
+      "id": "80c59f97-0d67-5247-b9c0-0e863e864f9b",
+      "name": "Schema: Entscheidungsvorlage",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        880,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "// Baut aus Ranking + KI-Begründung eine gut lesbare Entscheidungsvorlage (HTML für die Formularseite).\nconst r = $('Ranking & Bewertung').first().json;\nconst k = $input.first().json.output || {};\nconst f = r.favorit;\n\nconst eur = (x) => (x ?? 0).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\nconst BADGE = {\n  empfehlbar: ['#dafbe1', '#1a7f37', 'Empfohlen'],\n  rueckfrage: ['#fff8c5', '#9a6700', 'Rückfrage nötig'],\n  teilangebot: ['#ffebe9', '#cf222e', 'Teilangebot'],\n  abgelaufen: ['#eaeef2', '#57606a', 'Abgelaufen'],\n};\nconst badge = (kat) => {\n  const [bg, fg, label] = BADGE[kat] || BADGE.abgelaufen;\n  return `<span style=\"display:inline-block;background:${bg};color:${fg};border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;white-space:nowrap\">${label}</span>`;\n};\n\nconst kpi = (label, value, sub = '') =>\n  `<div style=\"flex:1 1 160px;background:#f6f8fa;border:1px solid #d0d7de;border-radius:10px;padding:12px 14px\">` +\n  `<div style=\"font-size:11px;color:#57606a;text-transform:uppercase;letter-spacing:.05em\">${label}</div>` +\n  `<div style=\"font-size:19px;font-weight:700;margin-top:4px;line-height:1.25\">${value}</div>` +\n  (sub ? `<div style=\"font-size:12px;color:#57606a;margin-top:3px\">${sub}</div>` : '') +\n  `</div>`;\n\nconst kpis =\n  `<div style=\"display:flex;flex-wrap:wrap;gap:10px;margin:4px 0 18px\">` +\n  kpi('Empfehlung', esc(f.lieferant), 'Angebot ' + esc(f.angebotsnr)) +\n  kpi('Effektive Kosten', eur(f.effektiv), eur(f.summe_netto) + ' netto') +\n  kpi('Lieferzeit', `${f.lieferzeit_wt ?? '?'} Arbeitstage`) +\n  kpi('Verglichen', `${r.anzahl_angebote} Angebote`) +\n  `</div>`;\n\nconst abschnitt = (titel, text) =>\n  text\n    ? `<div style=\"margin:0 0 12px\"><div style=\"font-weight:700;margin-bottom:3px\">${titel}</div>` +\n      `<div style=\"line-height:1.6\">${esc(text)}</div></div>`\n    : '';\n\nconst begruendung =\n  `<div style=\"border-left:4px solid #0969da;background:#f0f6ff;border-radius:8px;padding:14px 18px;margin-bottom:20px\">` +\n  `<div style=\"font-size:11px;color:#0969da;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px\">KI-Begründung</div>` +\n  abschnitt('Warum ' + esc(f.lieferant), k.begruendung) +\n  abschnitt('Abgrenzung zu den Alternativen', k.abgrenzung) +\n  abschnitt('Nächster Schritt', k.naechster_schritt) +\n  `</div>`;\n\nconst th = (t, align = 'left') => `<th style=\"padding:8px 10px;text-align:${align};font-size:12px;color:#57606a;font-weight:600\">${t}</th>`;\nconst td = (t, align = 'left', extra = '') => `<td style=\"padding:10px;text-align:${align};vertical-align:top;${extra}\">${t}</td>`;\n\nconst zeilen = r.rangliste\n  .map((b) => {\n    const details = [b.abweichungen, b.fehlende_positionen ? 'fehlt: Pos. ' + b.fehlende_positionen : '', b.warnungen]\n      .filter(Boolean)\n      .map((d) => `<div style=\"font-size:12px;color:#57606a;margin-top:4px\">${esc(d)}</div>`)\n      .join('');\n    const hervor = b.rang === 1 ? 'background:#f6fff8;' : '';\n    return (\n      `<tr style=\"border-top:1px solid #d0d7de;${hervor}\">` +\n      td(`<b>${b.rang}</b>`, 'center') +\n      td(`<b>${esc(b.lieferant)}</b>${details}`) +\n      td(eur(b.summe_netto), 'right', 'white-space:nowrap') +\n      td(`<b>${eur(b.effektiv)}</b>`, 'right', 'white-space:nowrap') +\n      td(`${b.lieferzeit_wt ?? '?'} AT`, 'right', 'white-space:nowrap') +\n      td(badge(b.kategorie)) +\n      `</tr>`\n    );\n  })\n  .join('');\n\nconst tabelle =\n  `<div style=\"overflow-x:auto;border:1px solid #d0d7de;border-radius:10px\">` +\n  `<table style=\"width:100%;border-collapse:collapse;font-size:14px\">` +\n  `<tr style=\"background:#f6f8fa\">${th('#', 'center')}${th('Lieferant')}${th('Netto', 'right')}${th('Effektiv', 'right')}${th('Lieferzeit', 'right')}${th('Status')}</tr>` +\n  zeilen +\n  `</table></div>`;\n\nconst html =\n  `<div style=\"text-align:left;color:#1f2328\">` +\n  (k.empfehlung ? `<p style=\"font-size:16px;line-height:1.5;margin:0 0 14px\">${esc(k.empfehlung)}</p>` : '') +\n  kpis +\n  begruendung +\n  `<div style=\"font-weight:700;margin:0 0 8px\">Rangliste</div>` +\n  tabelle +\n  `<p style=\"font-size:12px;color:#57606a;margin-top:10px\">Effektiv = netto ohne erstattbares Pfand, abzüglich Skonto. Es wird nichts automatisch bestellt.</p>` +\n  `</div>`;\n\nconst text = [k.empfehlung, k.begruendung, k.abgrenzung, k.naechster_schritt].filter(Boolean).join('\\n\\n');\n\nreturn [{ json: { html, text, titel: `Entscheidungsvorlage ${r.anfrage}` } }];\n"
+      },
+      "id": "dec0df4e-3eb9-5728-ae06-623868c17361",
+      "name": "Vorlage gestalten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Entscheidung",
+              "fieldType": "radio",
+              "fieldName": "entscheidung",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Freigeben"
+                  },
+                  {
+                    "option": "Ablehnen"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Kommentar (optional)",
+              "fieldType": "textarea",
+              "fieldName": "kommentar",
+              "placeholder": "z. B. Rückfrage bei EuroWrap zur Folienstärke"
+            }
+          ]
+        },
+        "options": {
+          "formTitle": "={{ $json.titel }}",
+          "formDescription": "={{ $json.html }}",
+          "buttonLabel": "Entscheidung speichern",
+          "customCss": ":root { --container-width: 860px; }\n.container, .card { max-width: 860px !important; width: 100% !important; }\n.form-header p, .card p { font-size: 15px; }"
+        }
+      },
+      "id": "31a702ae-bdff-5923-9400-59479b8e12c8",
+      "name": "Freigabe einholen",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        300
+      ],
+      "webhookId": "5a8892fa-c95f-5c9e-9a4f-75c2b920e513"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Entscheidung der Einkaufsleitung festhalten (Audit-Trail).\nconst r = $('Ranking & Bewertung').first().json;\nconst antwort = $input.first().json;\nconst entscheidung = antwort.entscheidung ?? antwort['Entscheidung'] ?? '';\nconst freigegeben = String(entscheidung).startsWith('Freigeben');\nreturn [\n  {\n    json: {\n      anfrage: r.anfrage,\n      ergebnis: freigegeben ? 'freigegeben' : 'abgelehnt',\n      lieferant: r.favorit.lieferant,\n      angebotsnr: r.favorit.angebotsnr,\n      summe_netto: r.favorit.summe_netto,\n      effektiv: r.favorit.effektiv,\n      anzahl_angebote: r.anzahl_angebote,\n      kommentar: antwort.kommentar ?? antwort['Kommentar'] ?? '',\n      begruendung_ki: $('Vorlage gestalten').first().json.text,\n      naechster_schritt: freigegeben\n        ? 'Bestellung manuell im Warenwirtschaftssystem auslösen'\n        : 'Angebote erneut prüfen oder nachverhandeln',\n    },\n  },\n];\n"
+      },
+      "id": "ec7845c0-be96-5b9b-aa26-5c9004b528e5",
+      "name": "Entscheidung aufbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "",
+          "cachedResultName": "entscheidungen"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "32c26b56-f4f5-5837-b50f-5613a3a37dca",
+      "name": "Entscheidung protokollieren",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "showText",
+        "responseText": "=<h2>{{ $('Entscheidung aufbereiten').item.json.ergebnis === 'freigegeben' ? '✓ Freigegeben' : '✗ Abgelehnt' }}</h2><p><b>{{ $('Entscheidung aufbereiten').item.json.lieferant }}</b> · Angebot {{ $('Entscheidung aufbereiten').item.json.angebotsnr }}</p><p>Nächster Schritt: {{ $('Entscheidung aufbereiten').item.json.naechster_schritt }}</p><p><small>Die Entscheidung wurde mit Begründung in der Tabelle 'entscheidungen' protokolliert.</small></p>"
+      },
+      "id": "7eefcbae-8961-5484-a1ce-0b50e46eca18",
+      "name": "Abschluss",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        1920,
+        300
+      ],
+      "webhookId": "2e10f2c1-8391-5c5a-9dcf-75b2bdc5f1ad"
+    },
+    {
+      "parameters": {
+        "content": "## 2 · Vergleich & Freigabe\n**Regeln entscheiden** (vollständig → Spezifikation/Lieferfrist → effektive Kosten → Lieferzeit), **die KI begründet** nur. Freigabe durch einen Menschen, jede Entscheidung wird protokolliert.",
+        "color": 7,
+        "width": 640,
+        "height": 224
+      },
+      "id": "29471ce7-2b7f-5084-8b1a-e2b9a67c9345",
+      "name": "Notiz: Vergleich & Freigabe",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -32,
+        208
+      ]
+    }
+  ],
+  "connections": {
+    "Vergleich starten": {
+      "main": [
+        [
+          {
+            "node": "Angebote laden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Angebote laden": {
+      "main": [
+        [
+          {
+            "node": "Ranking & Bewertung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ranking & Bewertung": {
+      "main": [
+        [
+          {
+            "node": "KI: Empfehlung formulieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude (Empfehlung)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "KI: Empfehlung formulieren",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schema: Entscheidungsvorlage": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "KI: Empfehlung formulieren",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KI: Empfehlung formulieren": {
+      "main": [
+        [
+          {
+            "node": "Vorlage gestalten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vorlage gestalten": {
+      "main": [
+        [
+          {
+            "node": "Freigabe einholen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freigabe einholen": {
+      "main": [
+        [
+          {
+            "node": "Entscheidung aufbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entscheidung aufbereiten": {
+      "main": [
+        [
+          {
+            "node": "Entscheidung protokollieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Entscheidung protokollieren": {
+      "main": [
+        [
+          {
+            "node": "Abschluss",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
